@@ -335,6 +335,11 @@ def change(session, info, action, *, backup=None, state_dir=None, boot=False):
             key: {"type": value["type"], "value": value["value"]}
             for key, value in final["home"]["settings"].items()
         }
+        if action == "apply":
+            # The TV can rewrite its derived boot backup to the launcher once Home points at it.
+            value = observed["db/appfw/booting_appid_backup"]
+            if value["type"] == "string" and value["value"] == home.releases.APP_ID:
+                expected_settings["db/appfw/booting_appid_backup"]["value"] = home.releases.APP_ID
         if boot:
             expected_settings["db/menu/smart_hub/ontvsetting/auto_start"]["value"] = 1
             for key in ("db/appfw/startup_appid", "db/appfw/booting_appid_backup"):

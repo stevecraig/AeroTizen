@@ -65,6 +65,25 @@ namespace AeroTizen.Home
             foreach (string key in Keys) if (left.Strings[key] != right.Strings[key]) return false;
             return true;
         }
+        public static string Differences(Snapshot actual, Snapshot expected)
+        {
+            var parts = new List<string>();
+            if (actual.Main != expected.Main) parts.Add("main=" + actual.Main + " (expected " + expected.Main + ")");
+            if (actual.AutoStart != expected.AutoStart) parts.Add("auto_start=" + actual.AutoStart + " (expected " + expected.AutoStart + ")");
+            foreach (string key in Keys)
+                if (actual.Strings[key] != expected.Strings[key]) parts.Add(key + "=" + actual.Strings[key] + " (expected " + expected.Strings[key] + ")");
+            return string.Join("; ", parts);
+        }
+        // Once Home points at the launcher, the TV can rewrite its derived boot backup
+        // to the launcher's ID on its own. Accept only that value for that key.
+        private static Snapshot WithDerivedBootBackup(Snapshot actual, Snapshot desired)
+        {
+            const string bootBackup = "db/appfw/booting_appid_backup";
+            if (desired.Main != Target || actual.Strings[bootBackup] != Target) return desired;
+            var expected = desired.Copy();
+            expected.Strings[bootBackup] = Target;
+            return expected;
+        }
         private static bool MatchesApplyBaseline(Snapshot current, Snapshot original)
         {
             // Opening the launcher can update this derived startup value before
@@ -149,7 +168,9 @@ namespace AeroTizen.Home
                 platform.SetAutoStart(desired.AutoStart);
                 if (platform.Read().AutoStart != desired.AutoStart) throw new Exception("Autostart readback failed.");
             }
-            if (!Same(platform.Read(), desired)) throw new Exception("Final Home readback failed.");
+            var final = platform.Read();
+            var accepted = WithDerivedBootBackup(final, desired);
+            if (!Same(final, accepted)) throw new Exception("Final Home readback failed: " + Differences(final, accepted));
             if (requireAbsent) RequireAbsent(platform);
         }
         private static Result RestoreAbsent(IPlatform platform, Request request, Snapshot before)
