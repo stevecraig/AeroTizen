@@ -74,14 +74,15 @@ namespace AeroTizen.Home
                 if (actual.Strings[key] != expected.Strings[key]) parts.Add(key + "=" + actual.Strings[key] + " (expected " + expected.Strings[key] + ")");
             return string.Join("; ", parts);
         }
-        // Once Home points at the launcher, the TV can rewrite its derived boot backup
-        // to the launcher's ID on its own. Accept only that value for that key.
-        private static Snapshot WithDerivedBootBackup(Snapshot actual, Snapshot desired)
+        // Once Home points at the launcher, the TV can rewrite its derived startup IDs
+        // to the launcher's ID on its own. Accept only that value for those keys.
+        private static readonly string[] DerivedStartupKeys = { "db/appfw/startup_appid", "db/appfw/booting_appid_backup" };
+        private static Snapshot WithDerivedStartupIds(Snapshot actual, Snapshot desired)
         {
-            const string bootBackup = "db/appfw/booting_appid_backup";
-            if (desired.Main != Target || actual.Strings[bootBackup] != Target) return desired;
+            if (desired.Main != Target) return desired;
             var expected = desired.Copy();
-            expected.Strings[bootBackup] = Target;
+            foreach (string key in DerivedStartupKeys)
+                if (actual.Strings[key] == Target) expected.Strings[key] = Target;
             return expected;
         }
         private static bool MatchesApplyBaseline(Snapshot current, Snapshot original)
@@ -169,7 +170,7 @@ namespace AeroTizen.Home
                 if (platform.Read().AutoStart != desired.AutoStart) throw new Exception("Autostart readback failed.");
             }
             var final = platform.Read();
-            var accepted = WithDerivedBootBackup(final, desired);
+            var accepted = WithDerivedStartupIds(final, desired);
             if (!Same(final, accepted)) throw new Exception("Final Home readback failed: " + Differences(final, accepted));
             if (requireAbsent) RequireAbsent(platform);
         }

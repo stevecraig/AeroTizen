@@ -12,6 +12,9 @@ sealed class Fake : IPlatform
     public bool Eligible = true, SideEffects, AutoSideEffects, AutoBadScreen, FailAll, SilentMain, LostCommit, ChangeDuringHold;
     public bool Installed = true, WatcherUnavailable, InstallationUnavailable, ReinstallOnWrite;
     public string BootBackupDuringHold;
+    // Some firmware re-derives the startup IDs from Home a moment after they are written.
+    public string RederiveStartupTo;
+    private readonly Dictionary<string, int> rederive = new Dictionary<string, int>();
     public int FailWrite, FailFrom, Writes;
     public string MissingLibrary, MissingSymbol;
     public int PointerSize = 4;
@@ -45,7 +48,13 @@ sealed class Fake : IPlatform
         if (InstallationUnavailable) throw new Exception("installation lookup unavailable");
         return Installed;
     }
-    public Snapshot Read() => Current.Copy();
+    public Snapshot Read()
+    {
+        var snapshot = Current.Copy();
+        foreach (string key in new List<string>(rederive.Keys))
+            if (--rederive[key] == 0) { rederive.Remove(key); Current.Strings[key] = RederiveStartupTo; }
+        return snapshot;
+    }
     private void Write(string kind)
     {
         Program.Check(CompatibilityChecked, "compatibility must precede every native write");
@@ -63,7 +72,14 @@ sealed class Fake : IPlatform
             Current.AutoStart = 1;
         }
     }
-    public void SetString(string key, string value) { Write(key); Current.Strings[key] = value; }
+    public void SetString(string key, string value)
+    {
+        Write(key); Current.Strings[key] = value;
+        // The readback right after the write still sees the value; the next read sees the TV's own.
+        if (RederiveStartupTo != null && Current.Main == Policy.Target && value != RederiveStartupTo &&
+            (key == "db/appfw/startup_appid" || key == "db/appfw/booting_appid_backup"))
+            rederive[key] = 2;
+    }
     public void SetAutoStart(int value) {
         Write("auto"); Current.AutoStart = value;
         if (AutoSideEffects && value == 1) {
@@ -167,6 +183,28 @@ static class Program
                 Check(Policy.Same(request.Original, original), "original snapshot must not change");
                 Check(fake.Events[0] == "mode:hold" && fake.Control.Mode == "native");
             }
+        });
+        Test("startup IDs the TV re-derives to the launcher after the write are accepted", () => {
+            foreach (bool boot in new[] { false, true }) {
+                var request = Request(); request.Boot = boot; request.Original.AutoStart = 1;
+                request.Original.Main = "com.samsung.tv.csfs";
+                foreach (string key in Policy.Keys) request.Original.Strings[key] = request.Original.Main;
+                var fake = new Fake { Current = request.Original.Copy(), SideEffects = true, RederiveStartupTo = Policy.Target };
+                var result = Policy.Execute(fake, request);
+                Check(result.Success && fake.Control.Mode == "native", "apply: " + result.Error);
+                Check(fake.Current.Main == Policy.Target && fake.Current.Strings[Policy.HomeKey] == Policy.Target);
+                Check(fake.Current.Strings["db/first_screen/type"] == request.Original.Main && fake.Current.AutoStart == 1);
+                var restore = Request("restore"); restore.Original = request.Original.Copy();
+                Check(Policy.Execute(fake, restore).Success && Policy.Same(fake.Current, request.Original));
+                Check(fake.Control.Mode == "watcher");
+            }
+        });
+        Test("startup IDs re-derived to anything but the launcher still roll back", () => {
+            var request = Request(); request.Original.AutoStart = 1;
+            var fake = new Fake { Current = request.Original.Copy(), SideEffects = true, RederiveStartupTo = "Other.App" };
+            var result = Policy.Execute(fake, request);
+            Check(!result.Success && result.RolledBack && result.Error.Contains("Other.App"));
+            Check(fake.Current.Main == request.Original.Main && fake.Control.Mode == "watcher");
         });
         Test("apply from launcher boot backup drift still restores the exact original", () => {
             var fake = new Fake(); fake.Current.Strings["db/appfw/booting_appid_backup"] = Policy.Target;

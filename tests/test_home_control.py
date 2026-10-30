@@ -291,6 +291,29 @@ def test_final_readback_cannot_claim_success_on_a_watcher_mismatch(monkeypatch, 
     assert receipt["state"] == "applied" and "error" in receipt
 
 
+@pytest.mark.parametrize("boot", [False, True])
+@pytest.mark.parametrize("derived", [home.releases.APP_ID, "Other.App"])
+def test_apply_accepts_only_launcher_derived_startup_ids(monkeypatch, tmp_path, status, boot, derived):
+    home.save_backup(status, state_dir=tmp_path)
+    final = copy.deepcopy(status)
+    final["home"]["main_operation"]["value"] = home.releases.APP_ID
+    final["home"]["settings"][home.HOME_KEY]["value"] = home.releases.APP_ID
+    final["watcher"]["control"]["mode"] = "native"
+    if boot:
+        final["home"]["settings"]["db/menu/smart_hub/ontvsetting/auto_start"]["value"] = 1
+    # Some firmware re-derives the startup IDs from Home after the writer has finished.
+    for key in ("db/appfw/startup_appid", "db/appfw/booting_appid_backup"):
+        final["home"]["settings"][key]["value"] = derived
+    reads = iter([status, final])
+    monkeypatch.setattr(home, "read_status", lambda *args: next(reads))
+    monkeypatch.setattr(sdk, "run", lambda *args: native_result("apply"))
+    if derived == home.releases.APP_ID:
+        assert home_control.change(object(), {}, "apply", boot=boot, state_dir=tmp_path)["success"]
+    else:
+        with pytest.raises(home.HomeError, match="final Home/watcher"):
+            home_control.change(object(), {}, "apply", boot=boot, state_dir=tmp_path)
+
+
 def test_native_policy_failure_boundaries_run_on_host_without_tizen():
     dotnet = os.environ.get("AEROTIZEN_DOTNET") or shutil.which("dotnet")
     if not dotnet:
